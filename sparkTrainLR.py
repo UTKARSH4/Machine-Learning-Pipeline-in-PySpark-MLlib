@@ -6,35 +6,57 @@ from pyspark2pmml import PMMLBuilder
 from pyspark.ml.feature import VectorAssembler, MinMaxScaler
 from pyspark.sql.types import DoubleType
 from pyspark.sql.functions import when, count, isnull
-import findspark
+import logging
+import sys
+#import findspark
 #findspark.add_packages("org.jpmml:jpmml-sparkml:2.4.0")
 
-conf = SparkConf().setMaster('local[*]').set("spark.jars.ivy", "C:/Users/utkarsh.verma\jr")
-sc = SparkContext.getOrCreate(conf)
-sqlContext = SQLContext(sc)
-spark = sqlContext.sparkSession
 
-df = spark.read.format('csv')\
-    .option('header', 'True')\
-    .option('inferSchema', 'True')\
-    .load('C:/Users/utkarsh.verma/Downloads/archive/framingham.csv')
-for col in df.columns:
-    df = df.withColumn(col, df[col].cast(DoubleType()))
+from create_spark import create_spark_object
+from validate import get_current_date
+from ingest import load_files, display_df, df_count
 
-df.show(truncate=False)
-
-# Check for missing values
-
-df = df.fillna(0)
-df.select([count(when(isnull(df[c]),c)).alias(c)
-           for c in df.columns])\
-    .show()
-df = df.withColumnRenamed('TenYearCHD', 'label')
-input_columns = df.drop('label', 'userId').schema.names
-print("columns are:", input_columns)
+logging.config.fileConfig('properties/configuration/logging.config')
 
 
-def ml_model(df, input_columns):
+def main():
+    try:
+        logging.info('I am the main method')
+        logging.info('calling spark object')
+        spark = create_spark_object()
+
+        #logging.info('object create...', str(spark))
+        logging.info('validating spark object')
+        get_current_date(spark)
+
+        logging.info('reading file....')
+        df = load_files(spark, file_dir='/home/utkarsh/Downloads/archive/framingham.csv')
+        logging.info('displaying the dataframe... ')
+        display_df(df,'df')
+        logging.info('validating the dataframe... ')
+        df_count(df,'df')
+
+        for col in df.columns:
+            df = df.withColumn(col, df[col].cast(DoubleType()))
+
+        df.show(truncate=False)
+
+        # Check for missing values
+
+        df = df.fillna(0)
+        df.select([count(when(isnull(df[c]),c)).alias(c)
+                   for c in df.columns]).show()
+        df = df.withColumnRenamed('TenYearCHD', 'label')
+        input_columns = df.drop('label', 'userId').schema.names
+        print("columns are:", input_columns)
+        ml_model(spark,df, input_columns)
+
+    except Exception as e:
+        logging.error('An error occured ===', str(e))
+        sys.exit(1)
+
+
+def ml_model(spark,df, input_columns):
 
     splits = df.randomSplit([0.8, 0.2])
     df_train = splits[0]
@@ -57,9 +79,11 @@ def ml_model(df, input_columns):
 
     print(bin_eval.evaluate(prediction))
 
+    pmml_builder = PMMLBuilder(spark, df_train, model)
+    pmml_builder.buildFile('/home/utkarsh/Downloads/archive/gbt.pmml')
 
-    pmml_builder = PMMLBuilder(sc, df_train, model)
-    pmml_builder.buildFile('C:/Users/utkarsh.verma/Downloads/archive/gbt.pmml')
 
+if __name__ == '__main__':
+    main()
+    logging.info('Application done')
 
-ml_model(df,input_columns)
